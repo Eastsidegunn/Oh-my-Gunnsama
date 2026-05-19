@@ -1,0 +1,1 @@
+{"type":"tool_execution_start","timestamp":"2026-05-19T10:30:01.000Z","toolCallId":"tool-1","toolName":"bash","args":{"command":"ls -la"}}

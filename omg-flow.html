@@ -1,0 +1,323 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>OMG Pipeline Flow</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:"Pretendard",-apple-system,system-ui,sans-serif;background:#0d1117;color:#c9d1d9;overflow:hidden;height:100vh}
+#toolbar{position:fixed;top:0;left:0;right:0;height:44px;background:#161b22;border-bottom:1px solid #30363d;display:flex;align-items:center;padding:0 16px;z-index:100;gap:12px}
+#toolbar .title{font-size:13px;font-weight:700;color:#f0f6fc}
+#toolbar .hint{font-size:11px;color:#484f58}
+#toolbar button{padding:4px 10px;font-size:11px;background:#21262d;border:1px solid #30363d;color:#c9d1d9;border-radius:4px;cursor:pointer}
+#toolbar button:hover{background:#30363d}
+#canvas{position:absolute;top:44px;left:0;right:0;bottom:0;overflow:hidden;cursor:grab}
+#canvas.dragging{cursor:grabbing}
+#world{position:absolute;transform-origin:0 0}
+.lane{position:absolute;border-radius:12px;border:1px solid #1c2128}
+.lane-label{position:absolute;font-size:10px;font-weight:700;letter-spacing:1.2px;text-transform:uppercase;writing-mode:vertical-rl;transform:rotate(180deg)}
+.node{position:absolute;border-radius:10px;border:2px solid #30363d;padding:14px 18px;width:220px;cursor:pointer;transition:border-color .15s,box-shadow .15s}
+.node:hover{border-color:#f97316;box-shadow:0 0 24px rgba(249,115,22,.15)}
+.node.expanded{z-index:10;width:420px}
+.node .name{font-size:14px;font-weight:700;margin-bottom:5px;display:flex;align-items:center;gap:6px}
+.node .role{font-size:10.5px;color:#8b949e;line-height:1.5}
+.node .badge{font-size:9px;padding:2px 6px;border-radius:3px;font-weight:600}
+.b-host{background:#3d2e1f;color:#f97316}
+.b-harness{background:#1f2d3d;color:#60a5fa}
+.b-core{background:#1f3d2a;color:#3fb950}
+.b-infra{background:#2d1f3d;color:#bc8cff}
+.b-future{background:#21262d;color:#484f58}
+.b-user{background:#21262d;color:#f97316}
+.node .detail{display:none;margin-top:12px;padding-top:12px;border-top:1px solid #30363d;font-size:11.5px;line-height:1.65;white-space:pre-wrap;max-height:420px;overflow-y:auto;color:#8b949e}
+.node.expanded .detail{display:block}
+.n-host{background:#1f1510;border-color:#7c4a1a}
+.n-harness{background:#0d1520;border-color:#1a4080}
+.n-core{background:#0d2010;border-color:#1a6030}
+.n-infra{background:#150d20;border-color:#4a1a7c}
+.n-future{background:#111;border-color:#30363d;border-style:dashed}
+.n-user{background:#111;border-color:#f97316}
+svg.arrows{position:absolute;top:0;left:0;width:5000px;height:4000px;pointer-events:none;z-index:5}
+.arrow{fill:none;stroke-width:2.5;marker-end:url(#ah)}
+.a-main{stroke:#f97316}
+.a-internal{stroke:#60a5fa;stroke-dasharray:6 3}
+.a-inject{stroke:#3fb950;stroke-width:2}
+.a-guard{stroke:#f43f5e;stroke-width:2;stroke-dasharray:5 3}
+.a-future{stroke:#484f58;stroke-dasharray:3 3;stroke-width:1.5}
+.arrow-tag{font-family:"Pretendard",-apple-system,sans-serif;font-size:10px;pointer-events:none}
+#legend{position:fixed;bottom:16px;right:16px;background:#161b22;border:1px solid #30363d;border-radius:8px;padding:14px 18px;font-size:11px;z-index:100;line-height:2.4}
+#legend .li{display:flex;align-items:center;gap:8px}
+#legend .lc{width:28px;height:3px;border-radius:2px}
+.phase-label{position:absolute;font-size:11px;font-weight:600;color:#30363d;letter-spacing:0.5px}
+</style>
+</head>
+<body>
+<div id="toolbar">
+<span class="title">Oh-My-Gunnsama Pipeline</span>
+<span class="hint">드래그: 이동 · 스크롤: 줌 · 노드 클릭: 상세</span>
+<button onclick="resetView()">리셋</button>
+<button onclick="expandAll()">전체 펼치기</button>
+<button onclick="collapseAll()">전체 접기</button>
+</div>
+<div id="canvas">
+<div id="world">
+<svg class="arrows" id="svg">
+<defs>
+<marker id="ah" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto"><polygon points="0 0, 10 3.5, 0 7" fill="#8b949e"/></marker>
+</defs>
+</svg>
+</div>
+</div>
+<div id="legend">
+<div class="li"><div class="lc" style="background:#f97316"></div>요청 흐름</div>
+<div class="li"><div class="lc" style="background:#60a5fa"></div>내부 파이프라인</div>
+<div class="li"><div class="lc" style="background:#3fb950"></div>프롬프트 주입</div>
+<div class="li"><div class="lc" style="background:#f43f5e"></div>guard 차단/허용</div>
+<div class="li"><div class="lc" style="background:#484f58"></div>미연결 (코드 있음)</div>
+<div style="margin-top:6px;color:#484f58;font-size:10px">점선 박스 = 아직 연결 안 된 모듈</div>
+</div>
+<script>
+var nodes = [
+  // ========== 호스트 영역 ==========
+  {id:"user",x:100,y:50,cls:"n-user",name:"사용자",badge:"입력",bcls:"b-user",
+   role:"Claude Code / Codex / OpenCode에서 입력",
+   detail:"자연어 요청을 호스트 LLM에 입력\n호스트가 hook 이벤트를 OMG에 전달"},
+
+  {id:"host",x:100,y:250,cls:"n-host",name:"호스트 LLM",badge:"Claude/Codex/OpenCode",bcls:"b-host",
+   role:"실제 생각하고 실행하는 주체. OMG 밖.",
+   detail:"OMG가 주입한 프롬프트를 시스템 프롬프트로 받음\n\n이후 자율적으로:\n• 코드 읽기/쓰기\n• 도구 호출\n• 판단/위임 (프롬프트에 세계관이 심어져 있으므로)\n\nOMG는 hook 이벤트로만 끼어듦\n호스트는 OMG의 존재를 모름"},
+
+  // ========== on-submit 파이프라인 ==========
+  {id:"daemon",x:500,y:50,cls:"n-harness",name:"daemon",badge:"소켓 서버",bcls:"b-harness",
+   role:"Unix socket으로 hook 이벤트 수신.",
+   detail:"호스트가 on-submit/on-tool-before/on-error/on-stop 전송\n→ daemon이 수신\n→ orchestrator.Handle()에 전달\n→ 응답을 호스트에 반환\n\n타임아웃:\n  on-submit: 500ms\n  on-tool-before: 200ms\n\nlock file로 단일 인스턴스 보장"},
+
+  {id:"orch",x:500,y:250,cls:"n-harness",name:"orchestrator",badge:"교통정리",bcls:"b-harness",
+   role:"이벤트 종류별로 내부 모듈 조합.",
+   detail:"on-submit → config→registry→route→prompt→inject\non-tool-before → guard 평가\non-error → state 전이 (failed/blocked)\non-stop → state 전이 (cancelled)\non-compact, on-tool-after → 통과\n\n직접 판단 안 함. 모듈을 연결만."},
+
+  {id:"config",x:900,y:50,cls:"n-core",name:"config",badge:"설정 로드",bcls:"b-core",
+   role:".omg/config.yaml 3단계 합산.",
+   detail:"built-in → ~/.omg/ → {project}/.omg/\n\nscalar: 덮어쓰기\nlist: 교체 (union 아님)\n*_append: 추가\ndisabled: scope-local shadow\n\n결과: agent/skill 정의 원본 데이터"},
+
+  {id:"registry",x:900,y:250,cls:"n-core",name:"registry",badge:"정규화",bcls:"b-core",
+   role:"config를 쓸 수 있는 형태로 정리.",
+   detail:"alias 충돌 감지 (fatal)\ntool policy 정규화\n  default / allowlist / all_except\nmodel chain 정리\n  model + model_chain 둘 다 → chain 우선\ndisabled agent 제거\nunknown field → warning (strict면 fatal)\n\n결과: 정제된 agent 목록"},
+
+  {id:"route",x:900,y:450,cls:"n-core",name:"route",badge:"agent 선택",bcls:"b-core",
+   role:"입력 텍스트 → agent 매칭.",
+   detail:"trigger 패턴 매칭\n  pattern: \"architecture|seam|interface\"\n  2+ 매치 → HIGH\n  1 매치 → MEDIUM\n  0 → LOW\n\nprocedure 추론:\n  cancel/plan/execute/review/verify/interview\n\nRequiresUser:\n  autonomy=cautious + LOW confidence → true\n\n결과: RouteResult\n  {agent, procedure, confidence, ...}"},
+
+  {id:"prompt",x:900,y:700,cls:"n-core",name:"prompt",badge:"프롬프트 조립",bcls:"b-core",
+   role:"agent 기반 시스템 프롬프트 조립.",
+   detail:"section 조립 (priority 순):\n\n[P100] identity — 넌 누구, procedure, domain\n[P95]  guardrails — 토큰 의식, 3번 반복 금지\n[P90]  tool-policy — 쓸 수 있는 도구\n[P85]  autonomy — cautious면 확인 요청\n[P80]  description — agent 설명\n[P70]  role-fit — useWhen/avoidWhen\n[P60]  project-rules — 프로젝트 규칙\n\ntoken budget 초과 → optional section 제거\nrequired section은 절대 생략 안 함\n\n결과: inject_prompt 응답"},
+
+  // ========== on-tool-before ==========
+  {id:"guard",x:500,y:550,cls:"n-core",name:"guard",badge:"정책 엔진",bcls:"b-core",
+   role:"도구 호출 전 allow/warn/block 판정.",
+   detail:"GuardInput:\n  request_id, tool, args, agent, autonomy\n\n규칙 순차 실행 → 결과 merge\n  block > warn > allow\n\ndestructive tool + guard 에러 → block\nnon-destructive + guard 에러 → warn\n\nsuppression:\n  yaml 선언 (reason 필수, project-local)\n\n결과: allow/warn/block 응답"},
+
+  // ========== on-error / on-stop ==========
+  {id:"state",x:500,y:800,cls:"n-core",name:"state",badge:"상태 머신",bcls:"b-core",
+   role:"세션 lifecycle 추적 + 영속.",
+   detail:"lifecycle:\n  inactive → running → blocked/ask_user/\n    finished/failed/cancelled\n\n전이 규칙 명시적 (불법 전이 → 에러)\nterminal: finished, failed, cancelled\n\nstale heartbeat → blocked (stale_owner)\nheartbeat timeout: 120초 (configurable)\n\n영속: .omg/state/sessions/{id}/state.json\natomic write (tmp+rename)"},
+
+  // ========== 호스트 어댑터 ==========
+  {id:"adapter",x:100,y:550,cls:"n-harness",name:"adapter",badge:"호스트 변환",bcls:"b-harness",
+   role:"호스트별 이벤트 ↔ protocol 변환.",
+   detail:"HostAdapter interface:\n  TranslateEvent() — 호스트 이벤트 → Request\n  TranslateResponse() — Response → 호스트 형식\n  Capabilities() — 호스트가 뭘 할 수 있는지\n\n구현체:\n  Claude adapter (800ms timeout)\n  Codex adapter (800ms timeout)\n  OpenCode adapter (미구현)\n\nprotocol translation만.\n비즈니스 로직 금지."},
+
+  // ========== 미연결 모듈 ==========
+  {id:"skills",x:1350,y:50,cls:"n-future",name:"skills",badge:"미연결",bcls:"b-future",
+   role:"skill.yaml 로드. orchestrator에서 안 부름.",
+   detail:"name, description, triggers, prompt\nmcp: server, tools, env_inherit\n\nagent/model 필드 거부 (v1)\n코드 있음, 연결만 하면 됨\n→ 프롬프트 section으로 skill 내용 주입"},
+
+  {id:"mcp",x:1350,y:250,cls:"n-future",name:"mcp",badge:"미연결",bcls:"b-future",
+   role:"MCP 서버 프로세스 관리. skill과 미연결.",
+   detail:"lazy start (첫 호출 시)\nidle shutdown (5분)\nzombie cleanup (pid 확인)\nenv allowlist 기반\n\n코드 있음, skill과 바인딩 필요"},
+
+  {id:"verify",x:1350,y:450,cls:"n-future",name:"verify",badge:"미연결",bcls:"b-future",
+   role:"검증 실행. orchestrator에서 안 부름.",
+   detail:"VerificationPlan → []VerificationCheck\n\ncheck: command(argv), manual, artifact\ntimeout per check\nevidence 수집\nrequired check 실패 → 전체 fail\n\n코드 있음, 트리거 연결 필요"},
+
+  {id:"fallback",x:1350,y:650,cls:"n-future",name:"model fallback",badge:"없음",bcls:"b-future",
+   role:"모델 에러 시 다음 모델로 재시도.",
+   detail:"아직 구현 안 됨\n\non-error에서:\n  rate_limit/unavailable → 다음 모델 시도\n  quota_exceeded → 중단\n\nagent의 model_chain에서 순서대로"},
+
+  {id:"ctx-mon",x:1350,y:850,cls:"n-future",name:"context 감시",badge:"없음",bcls:"b-future",
+   role:"토큰 사용량 추적 + 경고.",
+   detail:"아직 구현 안 됨\n\non-tool-after에서:\n  토큰 70% → 경고 주입\n  초과 → 압축 트리거"},
+];
+
+var arrows = [
+  // Main request flow
+  {from:"user",to:"host",cls:"a-main",label:"요청 입력"},
+  {from:"host",to:"daemon",cls:"a-main",label:"on-submit hook"},
+  {from:"daemon",to:"orch",cls:"a-main",label:"Handle()"},
+
+  // on-submit pipeline
+  {from:"orch",to:"config",cls:"a-internal",label:"1. 설정 로드"},
+  {from:"config",to:"registry",cls:"a-internal",label:"2. 정규화"},
+  {from:"registry",to:"route",cls:"a-internal",label:"3. agent 선택"},
+  {from:"route",to:"prompt",cls:"a-internal",label:"4. 프롬프트 조립"},
+
+  // inject back
+  {from:"prompt",to:"host",cls:"a-inject",label:"inject_prompt 응답"},
+
+  // on-tool-before
+  {from:"host",to:"daemon",cls:"a-guard",label:"on-tool-before"},
+  {from:"orch",to:"guard",cls:"a-internal",label:"guard 평가"},
+  {from:"guard",to:"host",cls:"a-guard",label:"allow/warn/block"},
+
+  // on-error / on-stop
+  {from:"host",to:"daemon",cls:"a-main",label:"on-error / on-stop"},
+  {from:"orch",to:"state",cls:"a-internal",label:"state 전이"},
+
+  // adapter
+  {from:"host",to:"adapter",cls:"a-internal",label:"호스트별 이벤트"},
+  {from:"adapter",to:"daemon",cls:"a-internal",label:"protocol 변환"},
+
+  // future connections
+  {from:"orch",to:"skills",cls:"a-future",label:"skill 로드 (미연결)"},
+  {from:"skills",to:"mcp",cls:"a-future",label:"MCP 바인딩 (미연결)"},
+  {from:"orch",to:"verify",cls:"a-future",label:"검증 트리거 (미연결)"},
+  {from:"orch",to:"fallback",cls:"a-future",label:"fallback (미구현)"},
+  {from:"orch",to:"ctx-mon",cls:"a-future",label:"토큰 감시 (미구현)"},
+];
+
+var scale=0.55, panX=30, panY=10;
+var dragging=false, dsx, dsy, dpx, dpy;
+var world=document.getElementById("world");
+var canvas=document.getElementById("canvas");
+var svg=document.getElementById("svg");
+
+function getNodeRect(id){
+  var el=world.querySelector('[data-id="'+id+'"]');
+  if(!el)return null;
+  return {l:parseInt(el.style.left),t:parseInt(el.style.top),w:el.offsetWidth,h:el.offsetHeight};
+}
+
+function render(){
+  var oldN=world.querySelectorAll(".node,.lane,.lane-label,.phase-label");
+  for(var i=0;i<oldN.length;i++) oldN[i].remove();
+  var oldA=svg.querySelectorAll(".arrow,.arrow-tag,rect.tag-bg");
+  for(var i=0;i<oldA.length;i++) oldA[i].remove();
+  world.style.transform="translate("+panX+"px,"+panY+"px) scale("+scale+")";
+
+  // Swim lanes
+  var lanes=[
+    {x:60,y:20,w:340,h:1000,color:"rgba(249,115,22,.03)",label:"호스트 영역",lcolor:"#7c4a1a"},
+    {x:440,y:20,w:400,h:1000,color:"rgba(96,165,250,.03)",label:"OMG 하네스",lcolor:"#1a4080"},
+    {x:860,y:20,w:420,h:1000,color:"rgba(59,185,80,.03)",label:"내부 모듈",lcolor:"#1a6030"},
+    {x:1310,y:20,w:300,h:1000,color:"rgba(72,79,88,.03)",label:"미연결 / 미구현",lcolor:"#30363d"},
+  ];
+  for(var i=0;i<lanes.length;i++){
+    var ln=lanes[i];
+    var div=document.createElement("div");
+    div.className="lane";
+    div.style.left=ln.x+"px";div.style.top=ln.y+"px";div.style.width=ln.w+"px";div.style.height=ln.h+"px";
+    div.style.background=ln.color;
+    world.appendChild(div);
+    var lb=document.createElement("div");
+    lb.className="lane-label";lb.style.left=(ln.x+ln.w-16)+"px";lb.style.top=(ln.y+ln.h/2)+"px";
+    lb.style.color=ln.lcolor;lb.textContent=ln.label;
+    world.appendChild(lb);
+  }
+
+  // Nodes
+  for(var i=0;i<nodes.length;i++){
+    var n=nodes[i];
+    var div=document.createElement("div");
+    div.className="node "+n.cls+(n._expanded?" expanded":"");
+    div.style.left=n.x+"px";div.style.top=n.y+"px";
+    div.dataset.id=n.id;
+    div.innerHTML='<div class="name">'+n.name+' <span class="badge '+n.bcls+'">'+n.badge+'</span></div><div class="role">'+n.role+'</div><div class="detail">'+esc(n.detail)+'</div>';
+    div.onclick=(function(nn){return function(e){nn._expanded=!nn._expanded;render();e.stopPropagation()}})(n);
+    world.appendChild(div);
+  }
+
+  setTimeout(function(){
+    var usedLabels=[];
+    for(var i=0;i<arrows.length;i++){
+      var a=arrows[i];
+      var fr=getNodeRect(a.from);
+      var tr=getNodeRect(a.to);
+      if(!fr||!tr)continue;
+
+      var fx,fy,tx,ty;
+
+      // Smart connection points
+      var fcx=fr.l+fr.w/2, fcy=fr.t+fr.h/2;
+      var tcx=tr.l+tr.w/2, tcy=tr.t+tr.h/2;
+      var dx=tcx-fcx, dy=tcy-fcy;
+
+      if(Math.abs(dx)>Math.abs(dy)){
+        // Horizontal dominant
+        if(dx>0){fx=fr.l+fr.w;fy=fcy;tx=tr.l;ty=tcy}
+        else{fx=fr.l;fy=fcy;tx=tr.l+tr.w;ty=tcy}
+      } else {
+        // Vertical dominant
+        if(dy>0){fx=fcx;fy=fr.t+fr.h;tx=tcx;ty=tr.t}
+        else{fx=fcx;fy=fr.t;tx=tcx;ty=tr.t+tr.h}
+      }
+
+      var offset=(i%5-2)*6;
+      var path=document.createElementNS("http://www.w3.org/2000/svg","path");
+      if(Math.abs(fy-ty)>Math.abs(fx-tx)*0.8){
+        var my=(fy+ty)/2+offset;
+        path.setAttribute("d","M"+fx+","+fy+" C"+fx+","+my+" "+tx+","+my+" "+tx+","+ty);
+      } else {
+        var mx=(fx+tx)/2+offset;
+        path.setAttribute("d","M"+fx+","+fy+" C"+mx+","+fy+" "+mx+","+ty+" "+tx+","+ty);
+      }
+      path.setAttribute("class","arrow "+a.cls);
+      svg.appendChild(path);
+
+      if(a.label){
+        var lx=(fx+tx)/2, ly=(fy+ty)/2;
+        for(var j=0;j<usedLabels.length;j++){
+          if(Math.abs(usedLabels[j].x-lx)<90&&Math.abs(usedLabels[j].y-ly)<18) ly+=20;
+        }
+        usedLabels.push({x:lx,y:ly});
+        var textLen=a.label.length*5.5+14;
+        var rect=document.createElementNS("http://www.w3.org/2000/svg","rect");
+        rect.setAttribute("x",lx-textLen/2);rect.setAttribute("y",ly-9);
+        rect.setAttribute("width",textLen);rect.setAttribute("height",16);
+        rect.setAttribute("rx","4");rect.setAttribute("fill","#0d1117");rect.setAttribute("stroke","#21262d");
+        rect.setAttribute("stroke-width","1");rect.setAttribute("class","tag-bg");
+        svg.appendChild(rect);
+        var text=document.createElementNS("http://www.w3.org/2000/svg","text");
+        text.setAttribute("x",lx);text.setAttribute("y",ly+3);
+        text.setAttribute("class","arrow-tag");
+        text.setAttribute("fill","#8b949e");text.setAttribute("font-size","10");
+        text.setAttribute("text-anchor","middle");
+        text.textContent=a.label;
+        svg.appendChild(text);
+      }
+    }
+  },20);
+}
+
+function esc(s){return s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;")}
+canvas.addEventListener("mousedown",function(e){
+  if(e.target.closest(".node"))return;
+  dragging=true;canvas.classList.add("dragging");
+  dsx=e.clientX;dsy=e.clientY;dpx=panX;dpy=panY;
+});
+window.addEventListener("mousemove",function(e){if(!dragging)return;panX=dpx+(e.clientX-dsx);panY=dpy+(e.clientY-dsy);render()});
+window.addEventListener("mouseup",function(){dragging=false;canvas.classList.remove("dragging")});
+canvas.addEventListener("wheel",function(e){
+  e.preventDefault();
+  var d=e.deltaY>0?-0.05:0.05;
+  var ns=Math.max(0.15,Math.min(2.5,scale+d));
+  var r=canvas.getBoundingClientRect();
+  var mx=e.clientX-r.left,my=e.clientY-r.top;
+  panX=mx-(mx-panX)*(ns/scale);panY=my-(my-panY)*(ns/scale);
+  scale=ns;render();
+},{passive:false});
+function resetView(){scale=0.55;panX=30;panY=10;render()}
+function expandAll(){for(var i=0;i<nodes.length;i++)nodes[i]._expanded=true;render()}
+function collapseAll(){for(var i=0;i<nodes.length;i++)nodes[i]._expanded=false;render()}
+render();
+</script>
+</body>
+</html>

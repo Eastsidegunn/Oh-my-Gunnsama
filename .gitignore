@@ -1,0 +1,28 @@
+# Runtime artifacts (created at execution, not source)
+.omg/
+.omx/state/
+.omx/logs/
+.omx/tmp/
+.omx/metrics.json
+.omx/.DS_Store
+
+# Build outputs (leading slash anchors to repo root only — NOT cmd/omg/)
+/omg
+*.test
+*.out
+
+# Broken / accidental
+/versi
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*~
+
+# Reference projects (excluded from this repo per scope decision)
+reference/
+
+# Test-time temp
+/tmp/

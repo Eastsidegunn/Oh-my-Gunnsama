@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>OmG v1 Core DB — 구현 현황</title>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+<style>
+:root{--bg:#09111f;--panel:#101a2c;--line:#29384f;--text:#edf4ff;--muted:#9fb0ca;--ok:#86efac;--warn:#fde68a;--bad:#fca5a5;--accent:#7dd3fc}*{box-sizing:border-box}body{margin:0;background:radial-gradient(circle at top left,#172554,transparent 34rem),var(--bg);color:var(--text);font-family:ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;line-height:1.55}header{padding:48px 6vw 28px;border-bottom:1px solid var(--line)}main{max-width:1500px;margin:auto;padding:28px 6vw 64px}h1{font-size:clamp(34px,5vw,64px);line-height:1.05;margin:0 0 14px;letter-spacing:-.04em}h2{font-size:28px;margin:0 0 16px}h3{color:#dbeafe}.sub{max-width:980px;color:var(--muted);font-size:18px}.pill{display:inline-block;margin:6px 6px 0 0;padding:7px 11px;border:1px solid var(--line);border-radius:999px;background:#0f172a;color:#dbeafe;font-size:13px}section{margin:24px 0;padding:24px;border:1px solid var(--line);border-radius:22px;background:rgba(16,26,44,.9)}.grid{display:grid;gap:16px}.two{grid-template-columns:repeat(2,minmax(0,1fr))}.three{grid-template-columns:repeat(3,minmax(0,1fr))}@media(max-width:900px){.two,.three{grid-template-columns:1fr}}.card{padding:18px;border:1px solid var(--line);border-radius:18px;background:#0f172a}.ok{color:var(--ok);font-weight:700}.warn{color:var(--warn);font-weight:700}.bad{color:var(--bad);font-weight:700}.muted{color:var(--muted)}code,pre{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace}pre{overflow:auto;background:#07111f;border:1px solid var(--line);border-radius:16px;padding:16px}.mermaid-wrap{background:#f8fafc;border-radius:18px;padding:18px;overflow:auto}.mermaid{min-width:820px}table{width:100%;border-collapse:collapse}th,td{border-bottom:1px solid var(--line);padding:10px;text-align:left;vertical-align:top}th{color:#bfdbfe;background:#1e293b}tr:last-child td{border-bottom:0}
+</style>
+</head>
+<body>
+<header>
+<h1>OmG v1 Core DB<br/>DBML 그대로 구현한 현황</h1>
+<p class="sub">수정된 구현 기준 문서다. 이전 HTML의 trace-only VictoriaTraces 설명은 폐기. 현재 구현은 <b>.omx/plans/omg-v1-core-db.dbml</b>의 중심 객체를 <b>repo-local .omg/omg.db SQLite</b> schema로 생성하고, orchestrator/verify가 DB-backed Event Ledger와 관련 table에 기록한다.</p>
+<span class="pill">Default DB: .omg/omg.db</span><span class="pill">Decision: DEC-010</span><span class="pill">JSONL 없음</span><span class="pill">DBML-shaped tables 구현</span>
+</header>
+<main>
+<section><h2>1. 지금 구현된 것</h2><div class="grid three"><div class="card"><h3>DB schema</h3><ul><li><span class="ok">30개 DBML table 생성</span></li><li>enum은 SQLite CHECK로 반영</li><li>핵심 FK/unique/index 반영</li></ul></div><div class="card"><h3>Runtime wiring</h3><ul><li><code>cmd/omg daemon start</code>가 DB open/migrate</li><li><code>orchestrator</code>에 <code>storage.Store</code> 주입</li><li>종료 시 DB close</li></ul></div><div class="card"><h3>Write path</h3><ul><li>Run/Event Ledger 기록</li><li>ToolCall specialized row 기록</li><li>Verification/Evidence row 기록</li></ul></div></div></section>
+<section><h2>2. C4 System Context</h2><div class="mermaid-wrap"><pre class="mermaid">
+flowchart LR
+  User["User / Developer"] --> Host["AI Host Adapter\nCodex / Claude / OpenCode"]
+  Host -->|protocol.Request| OmG["OmG\nRun-centered main AI development host"]
+  OmG -->|prompt/guard/lifecycle response| Host
+  OmG --> DB[".omg/omg.db\nCore DB"]
+  OmG --> State[".omg/state\nlegacy lifecycle snapshots"]
+  OmG --> Tools["Tools / Backends"]
+  DB --> Reports["Run replay / Control Board / Reports\nfollow-up"]
+  classDef core fill:#dbeafe,stroke:#2563eb,color:#111827
+  classDef db fill:#dcfce7,stroke:#16a34a,color:#111827
+  class OmG core
+  class DB,State db
+</pre></div></section>
+<section><h2>3. C4 Container</h2><div class="mermaid-wrap"><pre class="mermaid">
+flowchart TB
+  subgraph CLI["cmd/omg"]
+    Start["daemon start"]
+    Build["buildStorageSink()"]
+  end
+  subgraph Core["internal"]
+    Config["config.Load()"]
+    Daemon["daemon.Server"]
+    Orch["orchestrator.Handle()"]
+    Verify["verify.RunPlan()"]
+    Store["storage.Store"]
+    Schema["storage schema migration"]
+    State["state.Store"]
+  end
+  DB[".omg/omg.db"]
+  Snap[".omg/state/*.json"]
+  Start --> Config --> Build --> Store
+  Start --> Daemon --> Orch
+  Orch --> State --> Snap
+  Orch --> Store
+  Verify --> Store
+  Store --> Schema --> DB
+</pre></div></section>
+<section><h2>4. DB Diagram — 중심 구조</h2><div class="mermaid-wrap"><pre class="mermaid">
+erDiagram
+  repos ||--o{ runs : owns
+  runs ||--o{ work_items : contains
+  work_items ||--o{ work_dependencies : graph_edge
+  work_items ||--o{ work_scopes : constrains
+  work_items ||--o{ work_exit_criteria : defines
+  work_items ||--o{ work_required_outputs : requires
+  work_items ||--o{ work_claims : leased_by
+  runs ||--o{ agent_sessions : spawns
+  permission_policies ||--o{ permission_tools : allows
+  permission_policies ||--o{ permission_paths : restricts
+  permission_policies ||--o{ approval_rules : requires
+  runs ||--o{ context_packets : packages
+  context_packets ||--o{ context_packet_evidence : includes
+  runs ||--o{ evidence : collects
+  runs ||--o{ tool_calls : audits
+  runs ||--o{ verification_results : verifies
+  verification_results ||--o{ verification_evidence : supported_by
+  runs ||--o{ failure_diagnoses : diagnoses
+  runs ||--o{ events : ledgers
+  runs ||--o{ messages : mailbox
+  runs ||--o{ approval_requests : approvals
+  runs ||--o{ memory_candidates : proposes
+  runs ||--o{ reports : reports
+</pre></div></section>
+<section><h2>5. Deep Module 단위</h2><div class="grid two"><div class="card"><h3>internal/storage</h3><ul><li><code>OpenStore(ctx, projectRoot, Options)</code>: <code>.omg/omg.db</code> 생성</li><li><code>Migrate()</code>: DBML-shaped schema 생성</li><li><code>RecordEvent()</code>: Event Ledger + specialized table write</li><li><code>Count/HasTable</code>: 검증용 query</li></ul></div><div class="card"><h3>cmd/omg</h3><ul><li>daemon start 시 DB를 항상 open/migrate</li><li>config <code>storage.database.path</code>로 DB path override 가능</li><li>orchestrator dependency로 DB store 주입</li></ul></div><div class="card"><h3>internal/orchestrator</h3><ul><li>submit → <code>run_created</code></li><li>tool-before → <code>tool_call_started/blocked</code></li><li>tool-after → <code>tool_call_completed/failed</code></li><li>error/stop → <code>run_status_changed</code></li></ul></div><div class="card"><h3>internal/verify</h3><ul><li>verification result → <code>verification_passed/failed</code></li><li>check evidence → <code>evidence_created</code></li><li>DB sink 없으면 기존 behavior 유지</li></ul></div></div></section>
+<section><h2>6. Data Pipeline</h2><div class="mermaid-wrap"><pre class="mermaid">
+flowchart LR
+  Raw["Host event"] --> Req["protocol.Request"] --> Orch["orchestrator"]
+  Orch --> Event["storage.Event"]
+  Event --> Store["storage.Store.RecordEvent"]
+  Store --> Run["runs"]
+  Store --> Work["work_items / agent_sessions"]
+  Store --> Tool["tool_calls"]
+  Store --> Ver["verification_results / evidence"]
+  Store --> Ledger["events"]
+  Ledger --> DB[".omg/omg.db"]
+  Run --> DB
+  Work --> DB
+  Tool --> DB
+  Ver --> DB
+</pre></div></section>
+<section><h2>7. 구현된 DBML Tables</h2><p class="muted">repos, runs, work_items, work_dependencies, work_scopes, work_exit_criteria, work_required_outputs, work_claims, agent_sessions, permission_policies, permission_tools, permission_paths, approval_rules, context_packets, context_packet_evidence, context_packet_memory, evidence, evidence_stale_rules, tool_calls, verification_results, verification_evidence, failure_diagnoses, work_repackages, events, messages, message_evidence, approval_requests, memory_candidates, memory_candidate_evidence, reports, report_evidence</p></section>
+<section><h2>8. Verification</h2><ul><li><code>go test ./...</code> PASS</li><li><code>go vet ./...</code> PASS</li><li>storage tests verify DBML tables are created and rows are written into runs/work/tool/evidence/verification/events.</li></ul></section>
+<section><h2>9. 남은 것</h2><ul><li>Run replay query API</li><li>Control Board projection/query</li><li>Work Queue / Mailbox write APIs beyond table creation</li><li>FailureDiagnosis generation logic</li><li>DB migration version table</li></ul></section>
+</main>
+<script>mermaid.initialize({startOnLoad:true,securityLevel:'loose',theme:'base'});</script>
+</body>
+</html>
