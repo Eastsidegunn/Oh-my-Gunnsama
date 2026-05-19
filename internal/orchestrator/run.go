@@ -12,6 +12,7 @@ import (
 	"oh-my-gunnsama/internal/protocol"
 	"oh-my-gunnsama/internal/state"
 	"oh-my-gunnsama/internal/storage"
+	"oh-my-gunnsama/internal/verify"
 )
 
 // WorkerFactory constructs a Worker for the given WorkerConfig. Callers (the
@@ -165,25 +166,56 @@ func handleRun(ctx context.Context, req *Request, deps Dependencies) Response {
 	}
 
 	result, waitErr := worker.Wait(ctx)
+	workerSuccess := waitErr == nil && result.Success
+
+	if workerSuccess {
+		_ = recordStorageEvent(ctx, req, deps, storage.Event{
+			Type:      storage.EventWorkCompleted,
+			RunID:     runID,
+			WorkID:    workID,
+			Status:    "completed",
+			ActorType: "run_core",
+		})
+	} else {
+		_ = recordStorageEvent(ctx, req, deps, storage.Event{
+			Type:      storage.EventWorkFailed,
+			RunID:     runID,
+			WorkID:    workID,
+			Status:    "failed",
+			ActorType: "run_core",
+		})
+	}
+
+	var verifyResult *verify.VerificationResult
+	checks := parseChecks(req.Payload)
+	if workerSuccess && len(checks) > 0 {
+		verificationID := generateID("verification")
+		plan := buildVerificationPlan(checks, req.CWD)
+		options := verify.Options{
+			StorageSink:    deps.StorageSink,
+			RunID:          runID,
+			WorkID:         workID,
+			VerificationID: verificationID,
+			ActorID:        deps.OwnerID,
+			ProjectRoot:    req.Project,
+			Now:            deps.Now,
+		}
+		vr, vErr := verify.RunPlan(ctx, plan, options)
+		if vErr != nil {
+			warnings = append(warnings, "verification execution error: "+vErr.Error())
+		} else {
+			verifyResult = &vr
+		}
+	}
+
+	success := workerSuccess
+	if verifyResult != nil && !verifyResult.Passed {
+		success = false
+	}
 	finalLifecycle := state.LifecycleFinished
-	success := waitErr == nil && result.Success
 	if !success {
 		finalLifecycle = state.LifecycleFailed
 	}
-
-	workEventType := storage.EventWorkCompleted
-	workFinalStatus := "completed"
-	if !success {
-		workEventType = storage.EventWorkFailed
-		workFinalStatus = "failed"
-	}
-	_ = recordStorageEvent(ctx, req, deps, storage.Event{
-		Type:      workEventType,
-		RunID:     runID,
-		WorkID:    workID,
-		Status:    workFinalStatus,
-		ActorType: "run_core",
-	})
 
 	if stateStore != nil {
 		if _, err := stateStore.Transition(sessionID, state.TransitionInput{
@@ -218,7 +250,15 @@ func handleRun(ctx context.Context, req *Request, deps Dependencies) Response {
 		ActorType:      "run_core",
 	})
 
-	summary := fmt.Sprintf("run_id=%s work_id=%s session_id=%s status=%s events=%d", runID, workID, sessionID, finalLifecycle, eventCount)
+	verificationLabel := "skipped"
+	if verifyResult != nil {
+		if verifyResult.Passed {
+			verificationLabel = "verified"
+		} else {
+			verificationLabel = "failed"
+		}
+	}
+	summary := fmt.Sprintf("run_id=%s work_id=%s session_id=%s status=%s events=%d verification=%s", runID, workID, sessionID, finalLifecycle, eventCount, verificationLabel)
 	if !success {
 		errMsg := summary
 		if waitErr != nil {

@@ -153,13 +153,26 @@ func recordVerificationStorage(ctx context.Context, result VerificationResult, o
 			ProjectRoot:    options.ProjectRoot,
 			Attributes: map[string]string{
 				"check_id": evidence.CheckID,
-				"kind":     string(evidence.Kind),
+				"kind":     storageEvidenceKind(evidence.Kind),
 			},
 		}); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func storageEvidenceKind(k EvidenceKind) string {
+	switch k {
+	case EvidenceCommand:
+		return "terminal_log"
+	case EvidenceManual:
+		return "approval"
+	case EvidenceArtifact:
+		return "report"
+	default:
+		return "other"
+	}
 }
 
 func evidenceStatus(evidence CheckEvidence) string {

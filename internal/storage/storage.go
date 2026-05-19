@@ -243,12 +243,16 @@ ON CONFLICT(id) DO UPDATE SET status=excluded.status, current_phase=excluded.cur
 }
 
 func (s *Store) ensureWork(ctx context.Context, tx *sql.Tx, event Event) error {
+	status := workStatus(event)
+	if status == "" {
+		return nil
+	}
 	now := sqlTime(event.Timestamp)
 	_, err := tx.ExecContext(ctx, `
 INSERT INTO work_items (id, run_id, role, status, title, goal, created_at, updated_at)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(id) DO UPDATE SET status=excluded.status, updated_at=excluded.updated_at`,
-		event.WorkID, event.RunID, firstNonEmpty(event.Attributes["role"], "executor"), workStatus(event), firstNonEmpty(event.Attributes["title"], event.WorkID), firstNonEmpty(event.Attributes["goal"], string(event.Type)), now, now)
+		event.WorkID, event.RunID, firstNonEmpty(event.Attributes["role"], "executor"), status, firstNonEmpty(event.Attributes["title"], event.WorkID), firstNonEmpty(event.Attributes["goal"], string(event.Type)), now, now)
 	return err
 }
 
@@ -454,7 +458,7 @@ func workStatus(event Event) string {
 	switch event.Type {
 	case EventWorkCreated:
 		return "ready"
-	case EventWorkStarted:
+	case EventWorkStarted, EventToolCallStarted, EventToolCallCompleted:
 		return "running"
 	case EventWorkCompleted:
 		return "completed"
@@ -465,7 +469,7 @@ func workStatus(event Event) string {
 	case EventToolCallBlocked:
 		return "blocked"
 	default:
-		return "running"
+		return ""
 	}
 }
 

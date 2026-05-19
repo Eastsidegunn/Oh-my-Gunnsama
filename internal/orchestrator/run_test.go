@@ -244,6 +244,134 @@ func TestHandleRun_WorkerFailure(t *testing.T) {
 	}
 }
 
+func TestHandleRun_VerificationPasses(t *testing.T) {
+	sink := &recordingSink{}
+	worker := &stubWorker{
+		events: canonicalRunEvents(),
+		result: adapter.WorkerResult{ExitCode: 0, Success: true},
+	}
+	deps := Dependencies{
+		StorageSink:   sink,
+		WorkerFactory: newStubFactory(worker),
+		Now:           func() time.Time { return time.Unix(0, 0).UTC() },
+		OwnerID:       "test",
+	}
+	req := &Request{
+		Version:   protocol.Version,
+		RequestID: "run-verify-pass",
+		Provider:  protocol.ProviderDirect,
+		Event:     protocol.EventOnRun,
+		Payload: map[string]any{
+			"goal":   "say hello",
+			"checks": []string{"bash:true"},
+		},
+	}
+
+	resp := Handle(context.Background(), req, deps)
+
+	if !resp.OK {
+		t.Fatalf("expected OK=true, got %#v", resp)
+	}
+	if resp.Action != protocol.ActionNone {
+		t.Fatalf("expected ActionNone (verification passed), got %q", resp.Action)
+	}
+	if !strings.Contains(resp.Output, "verification=verified") {
+		t.Fatalf("output missing 'verification=verified': %s", resp.Output)
+	}
+	if !strings.Contains(resp.Output, "status=finished") {
+		t.Fatalf("output missing 'status=finished': %s", resp.Output)
+	}
+
+	counts := eventTypeCounts(sink.events)
+	if counts[storage.EventVerificationPassed] < 1 {
+		t.Fatalf("expected >=1 EventVerificationPassed, got %d (all=%v)", counts[storage.EventVerificationPassed], counts)
+	}
+	if counts[storage.EventVerificationFailed] != 0 {
+		t.Fatalf("expected 0 EventVerificationFailed, got %d", counts[storage.EventVerificationFailed])
+	}
+}
+
+func TestHandleRun_VerificationFails(t *testing.T) {
+	sink := &recordingSink{}
+	worker := &stubWorker{
+		events: canonicalRunEvents(),
+		result: adapter.WorkerResult{ExitCode: 0, Success: true},
+	}
+	deps := Dependencies{
+		StorageSink:   sink,
+		WorkerFactory: newStubFactory(worker),
+		Now:           func() time.Time { return time.Unix(0, 0).UTC() },
+		OwnerID:       "test",
+	}
+	req := &Request{
+		Version:   protocol.Version,
+		RequestID: "run-verify-fail",
+		Provider:  protocol.ProviderDirect,
+		Event:     protocol.EventOnRun,
+		Payload: map[string]any{
+			"goal":   "say hello",
+			"checks": []string{"bash:false"},
+		},
+	}
+
+	resp := Handle(context.Background(), req, deps)
+
+	if !resp.OK {
+		t.Fatalf("expected OK=true (verification failure is soft), got %#v", resp)
+	}
+	if resp.Action != protocol.ActionWarn {
+		t.Fatalf("expected ActionWarn (verification failed), got %q", resp.Action)
+	}
+	if !strings.Contains(resp.Output, "verification=failed") {
+		t.Fatalf("output missing 'verification=failed': %s", resp.Output)
+	}
+	if !strings.Contains(resp.Output, "status=failed") {
+		t.Fatalf("output missing 'status=failed' (run lifecycle): %s", resp.Output)
+	}
+
+	counts := eventTypeCounts(sink.events)
+	if counts[storage.EventVerificationFailed] < 1 {
+		t.Fatalf("expected >=1 EventVerificationFailed, got %d (all=%v)", counts[storage.EventVerificationFailed], counts)
+	}
+	if counts[storage.EventVerificationPassed] != 0 {
+		t.Fatalf("expected 0 EventVerificationPassed, got %d", counts[storage.EventVerificationPassed])
+	}
+}
+
+func TestHandleRun_VerificationSkippedWithoutChecks(t *testing.T) {
+	sink := &recordingSink{}
+	worker := &stubWorker{
+		events: canonicalRunEvents(),
+		result: adapter.WorkerResult{ExitCode: 0, Success: true},
+	}
+	deps := Dependencies{
+		StorageSink:   sink,
+		WorkerFactory: newStubFactory(worker),
+		Now:           func() time.Time { return time.Unix(0, 0).UTC() },
+		OwnerID:       "test",
+	}
+	req := &Request{
+		Version:   protocol.Version,
+		RequestID: "run-no-checks",
+		Provider:  protocol.ProviderDirect,
+		Event:     protocol.EventOnRun,
+		Payload:   map[string]any{"goal": "say hello"},
+	}
+
+	resp := Handle(context.Background(), req, deps)
+
+	if !resp.OK {
+		t.Fatalf("expected OK=true, got %#v", resp)
+	}
+	if !strings.Contains(resp.Output, "verification=skipped") {
+		t.Fatalf("output missing 'verification=skipped': %s", resp.Output)
+	}
+	counts := eventTypeCounts(sink.events)
+	if counts[storage.EventVerificationPassed]+counts[storage.EventVerificationFailed] != 0 {
+		t.Fatalf("expected 0 verification events (no checks), got passed=%d failed=%d", counts[storage.EventVerificationPassed], counts[storage.EventVerificationFailed])
+	}
+}
+
 func TestHandleRun_MissingGoal(t *testing.T) {
 	deps := Dependencies{
 		WorkerFactory: newStubFactory(&stubWorker{}),

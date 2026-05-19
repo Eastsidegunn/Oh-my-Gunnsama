@@ -149,11 +149,25 @@ func runOnToolBefore(ctx context.Context, stdin io.Reader, stdout, stderr io.Wri
 
 func runRun(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer, deps dependencies) int {
 	_ = stdin
-	if len(args) == 0 {
-		writeErrorResponse(stdout, nil, protocol.ErrorInvalidConfig, "missing goal: usage: omg run \"<goal>\"")
+	var checks []string
+	var goalParts []string
+	for i := 0; i < len(args); i++ {
+		if args[i] == "--check" && i+1 < len(args) {
+			checks = append(checks, args[i+1])
+			i++
+			continue
+		}
+		goalParts = append(goalParts, args[i])
+	}
+	if len(goalParts) == 0 {
+		writeErrorResponse(stdout, nil, protocol.ErrorInvalidConfig, "missing goal: usage: omg run \"<goal>\" [--check <kind>:<arg>[:<expected>]]")
 		return 1
 	}
-	goal := strings.Join(args, " ")
+	goal := strings.Join(goalParts, " ")
+	payload := map[string]any{"goal": goal}
+	if len(checks) > 0 {
+		payload["checks"] = checks
+	}
 	req := protocol.Request{
 		Version:   protocol.Version,
 		RequestID: newRequestID(),
@@ -161,7 +175,7 @@ func runRun(ctx context.Context, args []string, stdin io.Reader, stdout, stderr 
 		Event:     protocol.EventOnRun,
 		Project:   deps.cwd,
 		CWD:       deps.cwd,
-		Payload:   map[string]any{"goal": goal},
+		Payload:   payload,
 	}
 	resp, err := deps.client.RoundTrip(ctx, req)
 	if err == nil {

@@ -36,7 +36,10 @@ storage:
     path: $TMPDIR/.omg/omg.db
 EOF
 
-"$OMG" run "create hello.txt with content 'hi'" > /tmp/qa_omg_out.json 2> /tmp/qa_omg_err.log || {
+"$OMG" run "create hello.txt with content 'hi'" \
+  --check "file_exists:hello.txt" \
+  --check "file_content:hello.txt:hi" \
+  > /tmp/qa_omg_out.json 2> /tmp/qa_omg_err.log || {
   echo "omg run exit $?"
   echo "--- stdout ---"
   cat /tmp/qa_omg_out.json
@@ -62,7 +65,7 @@ AGENTS=$(sqlite3 .omg/omg.db "SELECT COUNT(*) FROM agent_sessions WHERE backend_
 EVENTS=$(sqlite3 .omg/omg.db "SELECT COUNT(*) FROM events")
 TOOLS=$(sqlite3 .omg/omg.db "SELECT COUNT(*) FROM tool_calls")
 WORK_ITEMS=$(sqlite3 .omg/omg.db "SELECT COUNT(*) FROM work_items")
-WORK_COMPLETED=$(sqlite3 .omg/omg.db "SELECT COUNT(*) FROM work_items WHERE status='completed'")
+WORK_SUCCEEDED=$(sqlite3 .omg/omg.db "SELECT COUNT(*) FROM work_items WHERE status IN ('completed','verified')")
 TOOL_WORK_FK=$(sqlite3 .omg/omg.db "SELECT COUNT(*) FROM tool_calls WHERE work_id IS NOT NULL")
 
 if [[ "$RUNS" -lt 1 ]]; then echo "FAIL: runs=$RUNS (want >=1)"; exit 1; fi
@@ -70,7 +73,17 @@ if [[ "$AGENTS" -lt 1 ]]; then echo "FAIL: agent_sessions(backend_kind=pi)=$AGEN
 if [[ "$EVENTS" -lt 5 ]]; then echo "FAIL: events=$EVENTS (want >=5)"; exit 1; fi
 if [[ "$TOOLS" -lt 1 ]]; then echo "FAIL: tool_calls=$TOOLS (want >=1)"; exit 1; fi
 if [[ "$WORK_ITEMS" -lt 1 ]]; then echo "FAIL: work_items=$WORK_ITEMS (want >=1)"; exit 1; fi
-if [[ "$WORK_COMPLETED" -lt 1 ]]; then echo "FAIL: work_items completed=$WORK_COMPLETED (want >=1)"; exit 1; fi
+if [[ "$WORK_SUCCEEDED" -lt 1 ]]; then echo "FAIL: work_items terminal success=$WORK_SUCCEEDED (want >=1; status=completed or verified)"; exit 1; fi
 if [[ "$TOOL_WORK_FK" -lt 1 ]]; then echo "FAIL: tool_calls with work_id=$TOOL_WORK_FK (want >=1; check WorkID propagation)"; exit 1; fi
 
-echo "PASS: hello run (runs=$RUNS agent_sessions=$AGENTS events=$EVENTS tool_calls=$TOOLS work_items=$WORK_ITEMS work_completed=$WORK_COMPLETED tool_work_fk=$TOOL_WORK_FK)"
+VERIFICATIONS=$(sqlite3 .omg/omg.db "SELECT COUNT(*) FROM verification_results")
+VERIFIED_WORK=$(sqlite3 .omg/omg.db "SELECT COUNT(*) FROM work_items WHERE status='verified'")
+EVIDENCE_ROWS=$(sqlite3 .omg/omg.db "SELECT COUNT(*) FROM evidence")
+PASSED_VERIFICATIONS=$(sqlite3 .omg/omg.db "SELECT COUNT(*) FROM verification_results WHERE status='passed'")
+
+if [[ "$VERIFICATIONS" -lt 1 ]]; then echo "FAIL: verification_results=$VERIFICATIONS (want >=1)"; exit 1; fi
+if [[ "$PASSED_VERIFICATIONS" -lt 1 ]]; then echo "FAIL: passed verifications=$PASSED_VERIFICATIONS (want >=1)"; exit 1; fi
+if [[ "$VERIFIED_WORK" -lt 1 ]]; then echo "FAIL: verified work_items=$VERIFIED_WORK (want >=1; checks should promote work to verified state)"; exit 1; fi
+if [[ "$EVIDENCE_ROWS" -lt 2 ]]; then echo "FAIL: evidence rows=$EVIDENCE_ROWS (want >=2; one per check)"; exit 1; fi
+
+echo "PASS: hello run (runs=$RUNS agent_sessions=$AGENTS events=$EVENTS tool_calls=$TOOLS work_items=$WORK_ITEMS work_succeeded=$WORK_SUCCEEDED tool_work_fk=$TOOL_WORK_FK verifications=$VERIFICATIONS verified=$VERIFIED_WORK evidence=$EVIDENCE_ROWS)"
