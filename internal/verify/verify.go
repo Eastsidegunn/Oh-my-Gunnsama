@@ -240,7 +240,12 @@ func (ExecRunner) Run(ctx context.Context, check VerificationCheck) (CommandResu
 		if command == "" {
 			command = strings.Join(check.Command, " ")
 		}
-		cmd = exec.CommandContext(ctx, "/bin/sh", "-c", command)
+		args := []string{"-c", command}
+		if check.ShellCommand != "" && len(check.Command) > 0 {
+			args = append(args, "--")
+			args = append(args, check.Command...)
+		}
+		cmd = exec.CommandContext(ctx, "/bin/sh", args...)
 	} else {
 		if len(check.Command) == 0 {
 			return CommandResult{}, fmt.Errorf("command argv is required")

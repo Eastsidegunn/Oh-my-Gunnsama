@@ -42,63 +42,69 @@ func buildVerificationPlan(checks []string, cwd string) verify.VerificationPlan 
 	return plan
 }
 
+// buildVerificationCheck constructs a VerificationCheck from a user-supplied
+// spec string. Security-critical: all user input flows here. Untrusted strings
+// must NEVER be interpolated into shell commands; they must be passed either
+// as argv elements (Shell=false) or as positional sh-c parameters
+// (Shell=true with values in Command[], referenced as $1/$2/...).
 func buildVerificationCheck(spec, cwd string, idx int) verify.VerificationCheck {
-	parts := strings.SplitN(spec, ":", 3)
-	if len(parts) < 2 {
-		return verify.VerificationCheck{
-			ID:           fmt.Sprintf("check_%d", idx),
-			Name:         spec,
-			Shell:        true,
-			ShellCommand: fmt.Sprintf("echo 'malformed check spec: %s' >&2; exit 1", spec),
-			Claim:        spec,
-			Required:     true,
-			EvidenceKind: verify.EvidenceCommand,
-			CWD:          cwd,
-			Timeout:      10 * time.Second,
-		}
-	}
-	kind := parts[0]
-	var shellCmd, name, claim string
-	switch kind {
-	case "file_exists":
-		path := parts[1]
-		shellCmd = fmt.Sprintf("test -f %q", path)
-		name = "file_exists:" + path
-		claim = fmt.Sprintf("file %q exists", path)
-	case "file_content":
-		path := parts[1]
-		if len(parts) < 3 {
-			shellCmd = "echo 'file_content needs expected value' >&2; exit 1"
-			name = "file_content:malformed"
-			claim = spec
-		} else {
-			expected := parts[2]
-			shellCmd = fmt.Sprintf("[ \"$(cat %q)\" = %q ]", path, expected)
-			name = "file_content:" + path
-			claim = fmt.Sprintf("file %q content == %q", path, expected)
-		}
-	case "bash":
-		bashCmd := parts[1]
-		if len(parts) >= 3 {
-			bashCmd = parts[1] + ":" + parts[2]
-		}
-		shellCmd = bashCmd
-		name = "bash:" + bashCmd
-		claim = fmt.Sprintf("shell %q exits 0", bashCmd)
-	default:
-		shellCmd = fmt.Sprintf("echo 'unknown check kind: %s' >&2; exit 1", kind)
-		name = "unknown:" + kind
-		claim = spec
-	}
-	return verify.VerificationCheck{
+	base := verify.VerificationCheck{
 		ID:           fmt.Sprintf("check_%d", idx),
-		Name:         name,
-		Shell:        true,
-		ShellCommand: shellCmd,
-		Claim:        claim,
 		Required:     true,
 		EvidenceKind: verify.EvidenceCommand,
 		CWD:          cwd,
 		Timeout:      10 * time.Second,
 	}
+
+	parts := strings.SplitN(spec, ":", 3)
+	if len(parts) < 2 {
+		base.Name = spec
+		base.Shell = false
+		base.Command = []string{"false"}
+		base.Claim = fmt.Sprintf("malformed check spec %q (missing colon)", spec)
+		return base
+	}
+
+	kind := parts[0]
+	switch kind {
+	case "file_exists":
+		path := parts[1]
+		base.Name = "file_exists:" + path
+		base.Shell = false
+		base.Command = []string{"test", "-f", path}
+		base.Claim = fmt.Sprintf("file %q exists", path)
+
+	case "file_content":
+		path := parts[1]
+		if len(parts) < 3 {
+			base.Name = "file_content:malformed"
+			base.Shell = false
+			base.Command = []string{"false"}
+			base.Claim = fmt.Sprintf("file_content needs expected value (spec=%q)", spec)
+			return base
+		}
+		expected := parts[2]
+		base.Name = "file_content:" + path
+		base.Shell = true
+		base.ShellCommand = `[ "$(cat -- "$1")" = "$2" ]`
+		base.Command = []string{path, expected}
+		base.Claim = fmt.Sprintf("file %q content == %q", path, expected)
+
+	case "bash":
+		bashCmd := parts[1]
+		if len(parts) >= 3 {
+			bashCmd = parts[1] + ":" + parts[2]
+		}
+		base.Name = "bash:" + bashCmd
+		base.Shell = true
+		base.ShellCommand = bashCmd
+		base.Claim = fmt.Sprintf("shell %q exits 0", bashCmd)
+
+	default:
+		base.Name = "unknown:" + kind
+		base.Shell = false
+		base.Command = []string{"false"}
+		base.Claim = fmt.Sprintf("unknown check kind %q in spec %q", kind, spec)
+	}
+	return base
 }
