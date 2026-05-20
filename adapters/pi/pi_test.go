@@ -2,6 +2,7 @@ package pi
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -87,6 +88,39 @@ func TestDriver_HappyPath(t *testing.T) {
 	}
 	if !sawToolStart {
 		t.Fatalf("no tool_execution_start event with ToolName=write among %d events", len(events))
+	}
+}
+
+func TestDriver_PassesAPIKeyFromSpecEnv(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "")
+	argsPath := filepath.Join(t.TempDir(), "args.txt")
+	d := newDriver(t, "fake_pi_args.sh")
+	spec := adapter.WorkerSpec{
+		Goal: "test",
+		Env: map[string]string{
+			"ANTHROPIC_API_KEY": "spec-key",
+			"FAKE_PI_ARGS_PATH": argsPath,
+		},
+	}
+	if err := d.Spawn(context.Background(), spec); err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	if _, closed := drainEvents(t, d.Events(), 2*time.Second); !closed {
+		t.Fatal("events channel did not close within 2s")
+	}
+	waitCtx, waitCancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer waitCancel()
+	if _, err := d.Wait(waitCtx); err != nil {
+		t.Fatalf("Wait: %v", err)
+	}
+
+	raw, err := os.ReadFile(argsPath)
+	if err != nil {
+		t.Fatalf("ReadFile(args): %v", err)
+	}
+	args := string(raw)
+	if !strings.Contains(args, "--api-key spec-key") {
+		t.Fatalf("args = %q, want --api-key from WorkerSpec.Env", args)
 	}
 }
 

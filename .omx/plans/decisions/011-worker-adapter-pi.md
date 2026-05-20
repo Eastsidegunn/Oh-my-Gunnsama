@@ -42,7 +42,7 @@ pi over a Go port. A Go-native agent would require porting pi's tool-call loop, 
 - Steering: no mid-run message injection.
 - Capability flags on the `Worker` interface.
 - Multi-worker scheduling.
-- Mailbox, verify, repackage, profile flows.
+- Mailbox, repackage, profile flows. *(Note: `verify` was originally a non-goal but was implemented in commit `ea5d4c3` the day after this DEC; see "Status amendments" below.)*
 - A second adapter (Claude CLI, Codex CLI, or OmG-inline).
 
 ## Known follow-ups
@@ -57,3 +57,8 @@ pi over a Go port. A Go-native agent would require porting pi's tool-call loop, 
 - `agent_sessions` row exists with `backend_kind = 'pi'`.
 - Event Ledger contains at least 5 events for the run.
 - `scripts/qa_hello_run.sh` exits 0.
+
+## Status amendments
+
+- `ea5d4c3` (feat D): verification gate implemented despite being listed as a non-goal here. Decision was made the day after DEC-011 was accepted, after the user explicitly asked for verification to land in v0.1. The non-goals list above has been struck through accordingly; this DEC otherwise stands as accepted.
+- `676b788` (fix B+C+D): `$PI_BIN` env var support landed per the locked sub-decision (was previously missing). Also wired `failure_diagnoses` table population so the DEC-008 packaging>intelligence thesis is runtime-observable.

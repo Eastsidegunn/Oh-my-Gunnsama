@@ -85,8 +85,8 @@ func (d *Driver) Spawn(ctx context.Context, spec adapter.WorkerSpec) error {
 		"--model", d.model,
 		"--no-session",
 	}
-	if d.apiKey != "" {
-		args = append(args, "--api-key", d.apiKey)
+	if apiKey := d.apiKeyForSpawn(spec); apiKey != "" {
+		args = append(args, "--api-key", apiKey)
 	}
 	if len(spec.AllowTools) > 0 {
 		args = append(args, "--tools", strings.Join(spec.AllowTools, ","))
@@ -148,6 +148,16 @@ func (d *Driver) Spawn(ctx context.Context, spec adapter.WorkerSpec) error {
 	}()
 
 	return nil
+}
+
+func (d *Driver) apiKeyForSpawn(spec adapter.WorkerSpec) string {
+	if key := strings.TrimSpace(spec.Env["ANTHROPIC_API_KEY"]); key != "" {
+		return key
+	}
+	if key := strings.TrimSpace(d.apiKey); key != "" {
+		return key
+	}
+	return strings.TrimSpace(os.Getenv("ANTHROPIC_API_KEY"))
 }
 
 // publishResult records the subprocess outcome under mu. Callers MUST close
