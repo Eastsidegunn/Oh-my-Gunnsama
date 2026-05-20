@@ -295,7 +295,7 @@ ON CONFLICT(id) DO UPDATE SET status=excluded.status, output_summary=excluded.ou
 
 func (s *Store) upsertEvidence(ctx context.Context, tx *sql.Tx, event Event) error {
 	id := firstNonEmpty(event.EvidenceID, deterministicID("evidence", event.ID))
-	kind := firstNonEmpty(event.Attributes["kind"], "other")
+	kind := mapVerifyEvidenceKind(firstNonEmpty(event.Attributes["kind"], "other"))
 	claim := firstNonEmpty(event.Attributes["claim"], event.Attributes["summary"], string(event.Type))
 	_, err := tx.ExecContext(ctx, `
 INSERT INTO evidence (id, run_id, work_id, agent_session_id, kind, claim, source_kind, source_path, command, exit_code, artifact_path, observed_at, freshness)
@@ -373,6 +373,28 @@ func (s *Store) HasTable(ctx context.Context, table string) (bool, error) {
 }
 
 func repoID(root string) string { return deterministicID("repo", root) }
+
+// mapVerifyEvidenceKind translates the verify package's internal EvidenceKind
+// strings ("command"/"manual"/"artifact") into the values permitted by the
+// evidence table's CHECK constraint. Unknown inputs (including the schema's
+// own canonical values, which pass through) fall back to "other" only if
+// they are not already in the allow-list. This keeps the verify package
+// decoupled from this schema enum.
+func mapVerifyEvidenceKind(verifyKind string) string {
+	switch verifyKind {
+	case "command":
+		return "terminal_log"
+	case "manual":
+		return "approval"
+	case "artifact":
+		return "report"
+	case "file_anchor", "git_diff", "test_result", "build_log",
+		"terminal_log", "screenshot", "approval", "report", "other":
+		return verifyKind
+	default:
+		return "other"
+	}
+}
 
 func deterministicID(parts ...string) string {
 	h := fnv.New64a()
