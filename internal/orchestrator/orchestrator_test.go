@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -149,6 +150,19 @@ type recordingSink struct {
 
 func (s *recordingSink) RecordEvent(_ context.Context, event storage.Event) error {
 	s.events = append(s.events, event)
+	return nil
+}
+
+type rejectingSink struct {
+	events []storage.Event
+	failOn storage.EventType
+}
+
+func (r *rejectingSink) RecordEvent(_ context.Context, event storage.Event) error {
+	if event.Type == r.failOn {
+		return fmt.Errorf("simulated storage rejection for %s", event.Type)
+	}
+	r.events = append(r.events, event)
 	return nil
 }
 

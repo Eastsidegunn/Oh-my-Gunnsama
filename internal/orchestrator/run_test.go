@@ -338,6 +338,58 @@ func TestHandleRun_VerificationFails(t *testing.T) {
 	}
 }
 
+func TestHandleRun_VerificationExecutionErrorFailsRun(t *testing.T) {
+	sink := &rejectingSink{
+		failOn: storage.EventVerificationPassed,
+	}
+	worker := &stubWorker{
+		events: canonicalRunEvents(),
+		result: adapter.WorkerResult{ExitCode: 0, Success: true},
+	}
+	deps := Dependencies{
+		StorageSink:   sink,
+		WorkerFactory: newStubFactory(worker),
+		Now:           func() time.Time { return time.Unix(0, 0).UTC() },
+		OwnerID:       "test",
+	}
+	req := &Request{
+		Version:   protocol.Version,
+		RequestID: "run-verify-exec-err",
+		Provider:  protocol.ProviderDirect,
+		Event:     protocol.EventOnRun,
+		Payload: map[string]any{
+			"goal":   "say hello",
+			"checks": []string{"bash:true"},
+		},
+	}
+
+	resp := Handle(context.Background(), req, deps)
+
+	if !resp.OK {
+		t.Fatalf("expected OK=true (soft failure), got %#v", resp)
+	}
+	if resp.Action != protocol.ActionWarn {
+		t.Fatalf("expected ActionWarn (verification could not execute), got %q", resp.Action)
+	}
+	if !strings.Contains(resp.Output, "status=failed") {
+		t.Fatalf("expected run lifecycle to be failed when verification cannot execute, got: %s", resp.Output)
+	}
+	if !strings.Contains(resp.Output, "verification=failed") {
+		t.Fatalf("expected verification=failed when verifier cannot run, got: %s", resp.Output)
+	}
+
+	var sawExecutionErrorWarning bool
+	for _, w := range resp.Warnings {
+		if strings.Contains(w, "verification execution error") {
+			sawExecutionErrorWarning = true
+			break
+		}
+	}
+	if !sawExecutionErrorWarning {
+		t.Fatalf("expected warning containing 'verification execution error'; warnings=%v", resp.Warnings)
+	}
+}
+
 func TestHandleRun_VerificationSkippedWithoutChecks(t *testing.T) {
 	sink := &recordingSink{}
 	worker := &stubWorker{

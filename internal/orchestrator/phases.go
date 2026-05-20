@@ -201,6 +201,15 @@ func runWithWorker(ctx context.Context, rc *runContext) {
 		}
 		vr, vErr := verify.RunPlan(ctx, plan, options)
 		if vErr != nil {
+			// User explicitly opted into verification via --check; if the
+			// verifier itself cannot execute (storage rejection, runner
+			// error, malformed plan), we have no proof the run succeeded.
+			// Treat as failed verification so the run terminates as failed
+			// rather than silently passing.
+			rc.VerifyResult = &verify.VerificationResult{
+				Passed:  false,
+				Summary: "verification execution error: " + vErr.Error(),
+			}
 			rc.Warnings = append(rc.Warnings, "verification execution error: "+vErr.Error())
 		} else {
 			rc.VerifyResult = &vr
