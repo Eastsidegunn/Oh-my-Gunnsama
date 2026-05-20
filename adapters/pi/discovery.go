@@ -20,15 +20,21 @@ var ErrBinaryNotFound = errors.New("pi binary not found")
 //
 // Environment variables other than $PATH (which LookPath uses) are not consulted.
 func DiscoverBinary(override string) (string, error) {
-	if override != "" {
-		info, err := os.Stat(override)
+	candidate := override
+	source := "config override"
+	if candidate == "" {
+		candidate = os.Getenv("PI_BIN")
+		source = "PI_BIN env var"
+	}
+	if candidate != "" {
+		info, err := os.Stat(candidate)
 		if err != nil {
-			return "", fmt.Errorf("pi binary override %q: %w", override, err)
+			return "", fmt.Errorf("pi binary from %s (%q): %w", source, candidate, err)
 		}
 		if info.IsDir() {
-			return "", fmt.Errorf("pi binary override %q: is a directory", override)
+			return "", fmt.Errorf("pi binary from %s (%q): is a directory", source, candidate)
 		}
-		return override, nil
+		return candidate, nil
 	}
 	path, err := exec.LookPath("pi")
 	if err != nil {

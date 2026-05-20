@@ -51,6 +51,7 @@ const (
 	EventApprovalGranted      EventType = "approval_granted"
 	EventApprovalDenied       EventType = "approval_denied"
 	EventReportCreated        EventType = "report_created"
+	EventFailureDiagnosed     EventType = "failure_diagnosed"
 )
 
 type Event struct {
@@ -234,6 +235,18 @@ ON CONFLICT(id) DO UPDATE SET root_path=excluded.root_path, updated_at=excluded.
 func (s *Store) ensureRun(ctx context.Context, tx *sql.Tx, event Event) error {
 	status := runStatus(event)
 	now := sqlTime(event.Timestamp)
+	insertStatus := status
+	if insertStatus == "" {
+		insertStatus = "scoped"
+	}
+	if status == "" {
+		_, err := tx.ExecContext(ctx, `
+INSERT INTO runs (id, repo_id, objective, status, current_phase, trace_id, created_by, created_at, updated_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(id) DO UPDATE SET updated_at=excluded.updated_at`,
+			event.RunID, repoID(event.ProjectRoot), firstNonEmpty(event.Attributes["objective"], event.RequestID, string(event.Type)), insertStatus, event.HostEvent, event.Attributes["trace_id"], event.ActorID, now, now)
+		return err
+	}
 	_, err := tx.ExecContext(ctx, `
 INSERT INTO runs (id, repo_id, objective, status, current_phase, trace_id, created_by, created_at, updated_at)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -274,6 +287,8 @@ func (s *Store) recordSpecializedRow(ctx context.Context, tx *sql.Tx, event Even
 		return s.upsertVerification(ctx, tx, event)
 	case EventEvidenceCreated:
 		return s.upsertEvidence(ctx, tx, event)
+	case EventFailureDiagnosed:
+		return s.upsertFailureDiagnosis(ctx, tx, event)
 	}
 	return nil
 }
@@ -463,16 +478,18 @@ func runStatus(event Event) string {
 	switch event.Type {
 	case EventRunCreated:
 		return "scoped"
+	case EventAgentSpawned, EventWorkStarted, EventToolCallStarted, EventToolCallCompleted, EventWorkCompleted:
+		return "executing"
 	case EventVerificationStarted:
 		return "verifying"
 	case EventVerificationPassed:
 		return "completed"
-	case EventVerificationFailed, EventToolCallFailed:
+	case EventVerificationFailed, EventToolCallFailed, EventWorkFailed, EventAgentFailed:
 		return "failed"
 	case EventToolCallBlocked:
 		return "blocked"
 	default:
-		return "executing"
+		return ""
 	}
 }
 

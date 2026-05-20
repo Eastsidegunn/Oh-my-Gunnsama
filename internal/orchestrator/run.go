@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"time"
 
 	"oh-my-gunnsama/internal/adapter"
 	"oh-my-gunnsama/internal/config"
@@ -63,6 +64,49 @@ func (rc *runContext) emit(ctx context.Context, ev storage.Event) {
 	if err := recordStorageEvent(ctx, rc.Request, rc.Deps, ev); err != nil {
 		rc.Warnings = append(rc.Warnings, storageWarning(err))
 	}
+}
+
+func (rc *runContext) recordRunFailure(parentCtx context.Context, failureType, reason string) {
+	termCtx, cancel := context.WithTimeout(context.WithoutCancel(parentCtx), 5*time.Second)
+	defer cancel()
+	if rc.WorkID != "" {
+		rc.emit(termCtx, storage.Event{
+			Type:      storage.EventWorkFailed,
+			RunID:     rc.RunID,
+			WorkID:    rc.WorkID,
+			Status:    "failed",
+			ActorType: "run_core",
+		})
+	}
+	rc.emit(termCtx, storage.Event{
+		Type:           storage.EventRunStatusChanged,
+		RunID:          rc.RunID,
+		AgentSessionID: rc.SessionID,
+		Status:         "failed",
+		Lifecycle:      string(state.LifecycleFailed),
+		ActorType:      "run_core",
+	})
+	if rc.SessionID != "" {
+		rc.emit(termCtx, storage.Event{
+			Type:           storage.EventAgentStopped,
+			RunID:          rc.RunID,
+			AgentSessionID: rc.SessionID,
+			Status:         "failed",
+			Lifecycle:      string(state.LifecycleFailed),
+			ActorType:      "run_core",
+		})
+	}
+	rc.emit(termCtx, storage.Event{
+		Type:      storage.EventFailureDiagnosed,
+		RunID:     rc.RunID,
+		WorkID:    rc.WorkID,
+		Status:    "diagnosed",
+		ActorType: "run_core",
+		Attributes: map[string]string{
+			"failure_type": failureType,
+			"reason":       truncate(reason, 500),
+		},
+	})
 }
 
 // preWorkerErr is a sentinel that lets the bail-out zone (preWorker) return

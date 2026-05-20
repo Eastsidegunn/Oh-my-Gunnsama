@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"oh-my-gunnsama/internal/adapter"
 	"oh-my-gunnsama/internal/config"
@@ -89,6 +90,7 @@ func preWorker(ctx context.Context, rc *runContext) error {
 			ActorType:      "run_core",
 			Attributes:     map[string]string{"error_message": err.Error()},
 		})
+		rc.recordRunFailure(ctx, "tool_failure", "worker factory: "+err.Error())
 		return bailErr(protocol.ErrorUnknown, fmt.Sprintf("worker factory: %v", err))
 	}
 	rc.Worker = worker
@@ -143,6 +145,7 @@ func preWorker(ctx context.Context, rc *runContext) error {
 			ActorType:      "run_core",
 			Attributes:     map[string]string{"error_message": err.Error()},
 		})
+		rc.recordRunFailure(ctx, "tool_failure", "worker spawn: "+err.Error())
 		return bailErr(protocol.ErrorUnknown, fmt.Sprintf("worker spawn: %v", err))
 	}
 	return nil
@@ -168,8 +171,11 @@ func runWithWorker(ctx context.Context, rc *runContext) {
 	rc.WorkerWaitErr = waitErr
 	rc.WorkerSuccess = waitErr == nil && result.Success
 
+	termCtx, cancelTerm := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancelTerm()
+
 	if rc.WorkerSuccess {
-		rc.emit(ctx, storage.Event{
+		rc.emit(termCtx, storage.Event{
 			Type:      storage.EventWorkCompleted,
 			RunID:     rc.RunID,
 			WorkID:    rc.WorkID,
@@ -177,7 +183,7 @@ func runWithWorker(ctx context.Context, rc *runContext) {
 			ActorType: "run_core",
 		})
 	} else {
-		rc.emit(ctx, storage.Event{
+		rc.emit(termCtx, storage.Event{
 			Type:      storage.EventWorkFailed,
 			RunID:     rc.RunID,
 			WorkID:    rc.WorkID,
@@ -199,7 +205,7 @@ func runWithWorker(ctx context.Context, rc *runContext) {
 			ProjectRoot:    rc.Request.Project,
 			Now:            rc.Deps.Now,
 		}
-		vr, vErr := verify.RunPlan(ctx, plan, options)
+		vr, vErr := verify.RunPlan(termCtx, plan, options)
 		if vErr != nil {
 			// User explicitly opted into verification via --check; if the
 			// verifier itself cannot execute (storage rejection, runner
@@ -240,7 +246,7 @@ func runWithWorker(ctx context.Context, rc *runContext) {
 	if !rc.Success {
 		finalStatus = "failed"
 	}
-	rc.emit(ctx, storage.Event{
+	rc.emit(termCtx, storage.Event{
 		Type:           storage.EventRunStatusChanged,
 		RunID:          rc.RunID,
 		AgentSessionID: rc.SessionID,
@@ -249,7 +255,7 @@ func runWithWorker(ctx context.Context, rc *runContext) {
 		ActorType:      "run_core",
 		Attributes:     map[string]string{"exit_code": fmt.Sprintf("%d", result.ExitCode)},
 	})
-	rc.emit(ctx, storage.Event{
+	rc.emit(termCtx, storage.Event{
 		Type:           storage.EventAgentStopped,
 		RunID:          rc.RunID,
 		AgentSessionID: rc.SessionID,
@@ -257,4 +263,34 @@ func runWithWorker(ctx context.Context, rc *runContext) {
 		Lifecycle:      string(rc.FinalLifecycle),
 		ActorType:      "run_core",
 	})
+
+	if !rc.Success {
+		failureType := "unknown"
+		reason := ""
+		if !rc.WorkerSuccess {
+			failureType = "tool_failure"
+			switch {
+			case rc.WorkerWaitErr != nil:
+				reason = "worker wait error: " + rc.WorkerWaitErr.Error()
+			case rc.WorkerResult.Reason != "":
+				reason = rc.WorkerResult.Reason
+			default:
+				reason = "worker reported failure with no detail"
+			}
+		} else if rc.VerifyResult != nil && !rc.VerifyResult.Passed {
+			failureType = "bad_exit_criteria"
+			reason = rc.VerifyResult.Summary
+		}
+		rc.emit(termCtx, storage.Event{
+			Type:      storage.EventFailureDiagnosed,
+			RunID:     rc.RunID,
+			WorkID:    rc.WorkID,
+			Status:    "diagnosed",
+			ActorType: "run_core",
+			Attributes: map[string]string{
+				"failure_type": failureType,
+				"reason":       truncate(reason, 500),
+			},
+		})
+	}
 }
