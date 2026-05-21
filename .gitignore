@@ -1,10 +1,15 @@
 # Runtime artifacts (created at execution, not source)
 .omg/
-.omx/state/
-.omx/logs/
-.omx/tmp/
-.omx/metrics.json
-.omx/.DS_Store
+
+# Working dirs (personal notes, plans, scratchpads)
+.omx/
+.scratch/
+
+# Review/flow visualisations (generated locally, not source of truth)
+/codereview.html
+/omg-flow.html
+/omo-flow.html
+/omx-flow.html
 
 # Build outputs (leading slash anchors to repo root only — NOT cmd/omg/)
 /omg
